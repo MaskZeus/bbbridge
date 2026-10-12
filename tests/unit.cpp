@@ -179,20 +179,20 @@ int main() {
         const fs::path root = fs::temp_directory_path() / L"bbbridge-unit-find";
         std::error_code ec;
         fs::remove_all(root, ec);
-        const fs::path port = root / L"bloodborne", other = root / L"other", games = root / L"games";
-        for (const auto& d : {port / L"bbbridge", other, games / L"CUSA03173"}) fs::create_directories(d);
-        std::ofstream(port / L"Bloodborne.exe") << "x";
+        const fs::path bbport_dir = root / L"bloodborne", other = root / L"other", games = root / L"games";
+        for (const auto& d : {bbport_dir / L"bbbridge", other, games / L"CUSA03173"}) fs::create_directories(d);
+        std::ofstream(bbport_dir / L"Bloodborne.exe") << "x";
         std::ofstream(games / L"Play Bloodborne.exe") << "x";
         const std::string game_dir = narrow((games / L"CUSA03173").wstring());
         BbportSource src{};
         check("bbport: the folder bbbridge is in",
-              find_bbport(port / L"bbbridge", {}, game_dir, &src) == port && src == BbportSource::ExeFolder);
+              find_bbport(bbport_dir / L"bbbridge", {}, game_dir, &src) == bbport_dir && src == BbportSource::ExeFolder);
         check("bbport: bbbridge.exe right next to Bloodborne.exe",
-              find_bbport(port, {}, "", &src) == port && src == BbportSource::ExeFolder);
+              find_bbport(bbport_dir, {}, "", &src) == bbport_dir && src == BbportSource::ExeFolder);
         check("bbport: a chosen folder that is gone falls back",
-              find_bbport(port / L"bbbridge", other, game_dir, &src) == port && src == BbportSource::ExeFolder);
+              find_bbport(bbport_dir / L"bbbridge", other, game_dir, &src) == bbport_dir && src == BbportSource::ExeFolder);
         check("bbport: the chosen folder wins",
-              find_bbport(port / L"bbbridge", games, "", &src) == games && src == BbportSource::Chosen);
+              find_bbport(bbport_dir / L"bbbridge", games, "", &src) == games && src == BbportSource::Chosen);
         check("bbport: from the launcher's game folder",
               find_bbport(other / L"bbbridge", {}, game_dir, &src) == games && src == BbportSource::Launcher);
         check("bbport: not found",

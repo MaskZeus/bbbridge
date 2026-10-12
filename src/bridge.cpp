@@ -646,6 +646,7 @@ void Session::start_pump() {
 void Session::pump_main() {
     uint64_t cursor = 0;
     double last_beat = -1e9;
+    int poll_failures = 0;
     auto wait = [this](double seconds) {
         std::unique_lock<std::mutex> lk(pump_mu_);
         pump_cv_.wait_for(lk, std::chrono::milliseconds(static_cast<int>(seconds * 1000)), [this] { return pump_stop_; });
@@ -679,6 +680,7 @@ void Session::pump_main() {
         try {
             json event;
             cursor = bb.poll_events(online, cursor, event);
+            poll_failures = 0;
             if (!event.is_null()) {
                 {
                     std::lock_guard<std::recursive_mutex> lk(mu_);
@@ -687,8 +689,10 @@ void Session::pump_main() {
                 bb.ack_event(online, cursor);
             }
         } catch (const BridgeError& e) {
-            log(std::string("event poll failed: ") + e.what());
-            if (!wait(3.0)) break;
+            // One miss is retried at once (an invite should not wait); a run of
+            // them is logged and slowed down.
+            if (++poll_failures >= 2) log(fmt("event poll failed (%d in a row): %s", poll_failures, e.what()));
+            if (poll_failures >= 2 && !wait(3.0)) break;
             continue;
         }
         if (!wait(bridge_.cfg.poll_interval)) break;

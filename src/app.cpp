@@ -902,12 +902,20 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int) {
     {
         App app(hwnd);
         bool done = false;
+        double last_input = now();
         while (!done) {
+            // Full rate (vsync) only while the player is using the window; idle
+            // ~10 frames a second (the log and status still move), minimized 4 -
+            // the game is the one that should have the CPU and GPU.
+            const bool minimized = IsIconic(hwnd) != 0;
+            if (now() - last_input > 0.5)
+                MsgWaitForMultipleObjects(0, nullptr, FALSE, minimized ? 250 : 100, QS_ALLINPUT);
             MSG msg;
             while (PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE)) {
                 TranslateMessage(&msg);
                 DispatchMessageW(&msg);
                 if (msg.message == WM_QUIT) done = true;
+                if (!minimized && msg.message != WM_TIMER && msg.message != WM_PAINT) last_input = now();
             }
             if (done) break;
             if (app.wants_close()) {
@@ -925,6 +933,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int) {
             ImGui::NewFrame();
             app.frame();
             ImGui::Render();
+            if (minimized) continue;   // the app still runs (status, close); nothing to show
             const float clear[4] = {0.07f, 0.07f, 0.08f, 1};
             g_context->OMSetRenderTargets(1, &g_rtv, nullptr);
             g_context->ClearRenderTargetView(g_rtv, clear);

@@ -27,11 +27,17 @@ std::string trim(const std::string& s) {
     return s.substr(a, b - a);
 }
 
+HINTERNET open_session() {
+    return WinHttpOpen(L"bbbridge", WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY, WINHTTP_NO_PROXY_NAME,
+                       WINHTTP_NO_PROXY_BYPASS, 0);
+}
+
 HINTERNET session() {
-    static HINTERNET h = WinHttpOpen(L"bbbridge", WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY,
-                                     WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
+    static HINTERNET h = open_session();
     return h;
 }
+
+ClientResponse send_on(HINTERNET session, const ClientRequest& req);
 
 struct Handle {
     HINTERNET h = nullptr;
@@ -60,9 +66,30 @@ std::string header_value(const Headers& headers, const std::string& name) {
     return "";
 }
 
-ClientResponse send(const ClientRequest& req) {
+ClientResponse send(const ClientRequest& req) { return send_on(session(), req); }
+
+Pool::~Pool() {
+    if (session_) WinHttpCloseHandle(session_);
+}
+
+ClientResponse Pool::send(const ClientRequest& req) {
+    std::lock_guard<std::mutex> lk(mu_);
+    if (session_ && bb::now() - opened_ >= max_age_) {   // closing the session closes its connection
+        WinHttpCloseHandle(session_);
+        session_ = nullptr;
+    }
+    if (!session_) {
+        session_ = open_session();
+        opened_ = bb::now();
+    }
+    return send_on(session_, req);
+}
+
+namespace {
+
+ClientResponse send_on(HINTERNET session, const ClientRequest& req) {
     ClientResponse res;
-    if (!session()) {
+    if (!session) {
         res.error = "WinHttpOpen failed";
         return res;
     }
@@ -82,7 +109,7 @@ ClientResponse send(const ClientRequest& req) {
         return res;
     }
     const bool secure = uc.nScheme == INTERNET_SCHEME_HTTPS;
-    Handle conn{WinHttpConnect(session(), host, uc.nPort, 0)};
+    Handle conn{WinHttpConnect(session, host, uc.nPort, 0)};
     if (!conn.h) {
         res.error = bb::fmt("connect failed (%lu)", GetLastError());
         return res;
@@ -149,6 +176,8 @@ ClientResponse send(const ClientRequest& req) {
     }
     return res;
 }
+
+}  // namespace
 
 ServerResponse ServerResponse::json(const bb::json& j, int status) {
     ServerResponse r;

@@ -38,6 +38,24 @@ struct ClientResponse {
 
 ClientResponse send(const ClientRequest& req);
 
+// A WinHTTP session of its own for one caller's requests in a row: its kept-
+// alive connection is closed and dialled again once it is max_age_s old, before
+// something on the way drops it silently. (The Hunter's Dream's event poll, on
+// the shared pool, hung for its whole timeout about once a minute.)
+class Pool {
+public:
+    explicit Pool(double max_age_s) : max_age_(max_age_s) {}
+    ~Pool();
+    Pool(const Pool&) = delete;
+    Pool& operator=(const Pool&) = delete;
+    ClientResponse send(const ClientRequest& req);
+
+private:
+    std::mutex mu_;
+    void* session_ = nullptr;   // HINTERNET
+    double opened_ = 0, max_age_;
+};
+
 struct ServerRequest {
     std::string method;
     std::string target;         // path with the query

@@ -8,6 +8,7 @@
 #include <stdexcept>
 #include <string>
 
+#include "http.hpp"
 #include "util.hpp"
 
 namespace bb {
@@ -60,9 +61,11 @@ private:
         int status = 0;
         json body;
     };
-    Reply post(const std::string& path, const json& body, int timeout_ms = 8000);   // throws on transport failure
+    // throws on transport failure; pool: a connection of its own (else the shared one)
+    Reply post(const std::string& path, const json& body, int timeout_ms = 8000, http::Pool* pool = nullptr);
     json call(const std::string& path, const json& body, int timeout_ms = 8000);     // + ResKind == 0
 
+    http::Pool poll_pool_{45.0};   // the event poll, every 0.4 s: redialled before it is a minute old
     std::string base_;
     mutable std::mutex mu_;
     std::string token_;

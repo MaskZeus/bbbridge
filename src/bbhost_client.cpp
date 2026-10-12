@@ -4,7 +4,7 @@
 
 namespace bb {
 
-BBHostClient::Reply BBHostClient::post(const std::string& path, const json& body, int timeout_ms) {
+BBHostClient::Reply BBHostClient::post(const std::string& path, const json& body, int timeout_ms, http::Pool* pool) {
     http::ClientRequest req;
     req.method = "POST";
     req.url = base_ + path;
@@ -14,7 +14,7 @@ BBHostClient::Reply BBHostClient::post(const std::string& path, const json& body
     const std::string tok = token();
     if (!tok.empty()) req.headers.emplace_back("X-BB-Token", tok);
     if (!ruleset.empty()) req.headers.emplace_back("X-BBHost-Ruleset", ruleset);
-    http::ClientResponse res = http::send(req);
+    http::ClientResponse res = pool ? pool->send(req) : http::send(req);
     if (!res.ok()) throw BridgeError(path + ": " + res.error);
     Reply r;
     r.status = res.status;
@@ -123,7 +123,7 @@ std::optional<Endpoint> BBHostClient::resolve_peer(const std::string& online_id)
 
 uint64_t BBHostClient::poll_events(const std::string& online_id, uint64_t cursor, json& event) {
     Reply r = post("/np/events/poll", {{"OnlineId", online_id}, {"Cursor", cursor}, {"Categories", {"matching2"}}},
-                   5000);
+                   5000, &poll_pool_);
     if (r.status == 401) throw BridgeError("server refused our token (HTTP 401)");
     if (r.status < 200 || r.status >= 300) throw BridgeError(fmt("/np/events/poll: HTTP %d", r.status));
     event = jint(r.body, "HasEvent", 0) ? r.body : json();

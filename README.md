@@ -23,6 +23,7 @@ E:\bloodborne\               bbport
    ├─ third_party\           nlohmann/json 3.11.3, Dear ImGui 1.91.5
    └─ bin\                   bbbridge-cli.exe (headless), bbbridge-unit.exe
 ```
+<img width="804" height="753" alt="resim" src="https://github.com/user-attachments/assets/acd524ad-5dc0-4cd7-84db-07d168cda35d" />
 
 ## Using it
 

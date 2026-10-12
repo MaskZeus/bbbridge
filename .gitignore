@@ -13,3 +13,6 @@ bbbridge.exe
 .vs/
 out/
 __pycache__/
+
+# Release packages (tools\make_release.ps1)
+dist/

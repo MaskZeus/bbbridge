@@ -1,0 +1,210 @@
+#include "setup.hpp"
+
+#include <tlhelp32.h>
+
+#include <fstream>
+#include <sstream>
+
+namespace bb {
+
+namespace {
+
+constexpr const char* kBackup = ".before-bbbridge";
+constexpr const char* kMarker = "_bbbridge";
+constexpr const char* kP2pVar = "SHADPS4_P2P_PORT";
+constexpr int kP2pPort = 3658;
+constexpr const char* kBridgeServer = "127.0.0.1:31313";
+constexpr const char* kBridgeWebapi = "http://127.0.0.1:31315";
+constexpr const char* kPublicServer = "srv.shadps4.net:31313";
+
+// bbhost's play-log patch (bbhost src/engine/playlog.cpp) in bbport's patch
+// format: the float immediates of `mov dword [rip+disp], imm32` in
+// SprjPlaylogSystem's static initializer - 0x23F9B86 stores 300.0f (upload
+// period), 0x23F9B68 stores 1.5f (position period); the float is at +6.
+// Verified against eboot.bin 1.09.
+const char* kPatchXml = R"xml(<?xml version="1.0"?>
+<Patch>
+    <TitleID>
+        <ID>CUSA03173</ID>
+    </TitleID>
+    <Metadata Title="Bloodborne" Name="Live map: play log every 5 s, position every 0.5 s" Note="Uploads the play log every 5 s instead of 300 s and samples the position every 0.5 s instead of 1.5 s, as bbhost does, so the player shows on thehuntersdream.com's live map." Author="bbbridge (from bbhost)" PatchVer="1.0" AppVer="01.09" AppElf="eboot.bin" isEnabled="true">
+        <PatchList>
+            <Line Type="float32" Address="0x023F9B8C" Value="5.0"/>
+            <Line Type="float32" Address="0x023F9B6E" Value="0.5"/>
+        </PatchList>
+    </Metadata>
+</Patch>
+)xml";
+
+nlohmann::ordered_json overrides() {
+    return {{kMarker, "Written by bbbridge: the game's server traffic goes through bbbridge. Turn off 'Route "
+                      "bbport through bbbridge' in bbbridge to remove."},
+            {"https://ss4.scej-network.jp:20443", "http://127.0.0.1:31316"},
+            {"https://thehuntersdream.com:20443", "http://127.0.0.1:31316"},
+            {"https://thehuntersdream.com:18671", "http://127.0.0.1:31317"},
+            {"http://thehuntersdream.com:18671", "http://127.0.0.1:31317"},
+            {"https://bb-playlog-test.s3.amazonaws.com:443", "http://127.0.0.1:31317"},
+            {"https://bb-playlog-prod.s3.amazonaws.com:443", "http://127.0.0.1:31317"},
+            {"https://thehuntersdream.com:18671/summon_messenger", "http://127.0.0.1:31315"},
+            {"http://thehuntersdream.com:18671/summon_messenger", "http://127.0.0.1:31315"}};
+}
+
+using ojson = nlohmann::ordered_json;
+
+ojson read_json(const fs::path& p) {
+    std::ifstream in(p);
+    if (!in) return ojson();
+    ojson j = ojson::parse(in, nullptr, false);
+    return j.is_discarded() ? ojson() : j;
+}
+
+void write_json(const fs::path& p, const ojson& j) {
+    const fs::path tmp = p.wstring() + L".tmp";
+    {
+        std::ofstream out(tmp, std::ios::trunc);
+        out << j.dump(2, ' ', false) << "\n";
+    }
+    MoveFileExW(tmp.c_str(), p.c_str(), MOVEFILE_REPLACE_EXISTING);
+}
+
+void backup(const fs::path& p) {
+    const fs::path target = p.wstring() + widen(kBackup);
+    std::error_code ec;
+    if (fs::exists(p, ec) && !fs::exists(target, ec)) fs::copy_file(p, target, ec);
+}
+
+std::string merge_env(const std::string& extra, const std::string& key, const std::string* value) {
+    std::istringstream in(extra);
+    std::string item, out;
+    while (in >> item)
+        if (item.rfind(key + "=", 0) != 0) out += (out.empty() ? "" : " ") + item;
+    if (value) out += (out.empty() ? "" : " ") + key + "=" + *value;
+    return out;
+}
+
+bool ours(const fs::path& overrides_file) {
+    const ojson j = read_json(overrides_file);
+    return j.is_object() && j.contains(kMarker);
+}
+
+}  // namespace
+
+bool process_running(const wchar_t* image) {
+    HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    if (snap == INVALID_HANDLE_VALUE) return false;
+    PROCESSENTRY32W e{};
+    e.dwSize = sizeof(e);
+    bool found = false;
+    for (BOOL ok = Process32FirstW(snap, &e); ok && !found; ok = Process32NextW(snap, &e))
+        found = _wcsicmp(e.szExeFile, image) == 0;
+    CloseHandle(snap);
+    return found;
+}
+
+bool launcher_running() { return process_running(L"Bloodborne.exe"); }
+bool game_running() { return process_running(L"Play Bloodborne.exe") || process_running(L"bb-probe.exe"); }
+
+bool is_bbport_dir(const fs::path& dir) {
+    std::error_code ec;
+    return fs::is_regular_file(dir / L"Bloodborne.exe", ec) || fs::is_regular_file(dir / L"Play Bloodborne.exe", ec);
+}
+
+BbportSetup::BbportSetup(const fs::path& exe_dir, const fs::path& bbport_dir) : exe_dir_(exe_dir), chosen_(bbport_dir) {
+    reload();
+}
+
+void BbportSetup::reload() {
+    wchar_t appdata[MAX_PATH] = {};
+    if (!GetEnvironmentVariableW(L"APPDATA", appdata, MAX_PATH)) throw SetupError("APPDATA is not set");
+    settings_file.clear();
+    for (const wchar_t* name : {L"bbport-launcher", L"bbport-launcher-coop"}) {
+        const fs::path p = fs::path(appdata) / name / L"settings.json";
+        std::error_code ec;
+        if (fs::is_regular_file(p, ec)) {
+            settings_file = p;
+            break;
+        }
+    }
+    if (settings_file.empty())
+        throw SetupError("bbport launcher settings not found. Start the bbport launcher once and close it.");
+    settings = read_json(settings_file);
+    if (!settings.is_object()) throw SetupError("the bbport launcher's settings.json cannot be read");
+    bbport.clear();
+    std::vector<fs::path> candidates;
+    if (!chosen_.empty()) candidates.push_back(chosen_);
+    candidates.push_back(exe_dir_.parent_path());   // bbbridge lives in a folder inside bbport's
+    const std::string game_dir = jstr(settings, "game_dir");
+    if (!game_dir.empty()) candidates.push_back(fs::path(widen(game_dir)).parent_path());
+    for (const auto& c : candidates)
+        if (is_bbport_dir(c)) {
+            bbport = c;
+            break;
+        }
+    if (bbport.empty()) throw SetupError("bbport folder not found - choose the folder with Bloodborne.exe.");
+    const std::string user = jstr(settings, "user_dir"), patches = jstr(settings, "patches_dir");
+    user_dir = user.empty() ? bbport / L"user" : fs::path(widen(user));
+    patches_dir = patches.empty() ? bbport / L"patches" : fs::path(widen(patches));
+}
+
+bool BbportSetup::routed() const {
+    return jint(settings, "online", 0) && jstr(settings, "online_server") == kBridgeServer &&
+           jstr(settings, "online_webapi") == kBridgeWebapi && ours(overrides_file());
+}
+
+bool BbportSetup::patched() const {
+    std::error_code ec;
+    return fs::is_regular_file(patch_file(), ec);
+}
+
+void BbportSetup::save_settings() {
+    backup(settings_file);
+    write_json(settings_file, settings);
+}
+
+void BbportSetup::set_npid(const std::string& npid) {
+    settings["online_npid"] = npid;
+    save_settings();
+}
+
+void BbportSetup::enable() {
+    settings["online"] = true;
+    settings["online_server"] = kBridgeServer;
+    settings["online_webapi"] = kBridgeWebapi;
+    const std::string port = std::to_string(kP2pPort);
+    settings["extra_env"] = merge_env(jstr(settings, "extra_env"), kP2pVar, &port);
+    save_settings();
+    std::error_code ec;
+    fs::create_directories(user_dir, ec);
+    if (fs::exists(overrides_file(), ec) && !ours(overrides_file())) backup(overrides_file());
+    write_json(overrides_file(), overrides());
+}
+
+void BbportSetup::disable() {
+    const ojson old = read_json(settings_file.wstring() + widen(kBackup));
+    std::string server = jstr(old, "online_server", kPublicServer);
+    if (server.empty() || server == kBridgeServer) server = kPublicServer;
+    std::string webapi = jstr(old, "online_webapi", "");
+    if (webapi == kBridgeWebapi) webapi.clear();
+    settings["online_server"] = server;
+    settings["online_webapi"] = webapi;
+    settings["extra_env"] = merge_env(jstr(settings, "extra_env"), kP2pVar, nullptr);
+    save_settings();
+    std::error_code ec;
+    if (ours(overrides_file())) {
+        fs::remove(overrides_file(), ec);
+        const fs::path prev = overrides_file().wstring() + widen(kBackup);
+        if (fs::exists(prev, ec)) fs::rename(prev, overrides_file(), ec);
+    }
+}
+
+void BbportSetup::set_patch(bool on) {
+    std::error_code ec;
+    if (on) {
+        fs::create_directories(patches_dir, ec);
+        std::ofstream(patch_file(), std::ios::trunc) << kPatchXml;
+    } else {
+        fs::remove(patch_file(), ec);
+    }
+}
+
+}  // namespace bb

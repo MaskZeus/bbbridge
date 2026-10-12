@@ -1,0 +1,15 @@
+# Your account (token + recovery code): never commit or share it.
+bbbridge_state.json
+bbbridge_state.json.*
+
+# Logs and trace captures (they can hold session ids)
+*.log
+captures/
+
+# Build output
+build/
+bin/
+bbbridge.exe
+.vs/
+out/
+__pycache__/

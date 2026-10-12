@@ -210,7 +210,9 @@ public:
         if (setup_ && setup_->routed()) start_bridge();   // routed already: be ready when the game starts
     }
 
-    ~App() { stop_bridge(); }
+    ~App() {
+        stop_bridge();   // and the game's server traffic goes back to bbport's own addresses
+    }
 
     void frame();
     bool wants_close() {
@@ -244,6 +246,7 @@ private:
     void log_panel();
     void use_npid(const std::string& npid);
     void apply_defaults();
+    void sync_overrides();
     bool live_map_wanted() const { return jint(config_, "live_map", 1) != 0; }
     bool route_wanted() const { return jint(config_, "route", 1) != 0; }   // the box, as last ticked; bbhost by default
     bool signed_in() const { return !account_.empty() && !account_kind(state_path(), account_).empty(); }
@@ -368,8 +371,26 @@ void App::refresh() {
         patched_ = setup_->patched();
         if (!jint(config_, "defaults_applied", 0) && !launcher_running_ && !game_running_ && signed_in())
             apply_defaults();
+        sync_overrides();
     }
     last_refresh_ = now();
+}
+
+// The game's server traffic goes to bbbridge (host_overrides.custom.json) exactly
+// while bbport is switched to The Hunter's Dream and the bridge runs: with
+// bbbridge closed, or bbport set back to shadNet in its own launcher, the file
+// would leave the game unable to reach its server.
+void App::sync_overrides() {
+    if (!setup_) return;
+    const bool want = setup_->routed() && bridge_;   // live: PLAY routes and starts the bridge in one go
+    if (want == setup_->overrides_written()) return;
+    try {
+        setup_->set_overrides(want);
+        log(want ? "the game's server traffic goes through bbbridge"
+                 : "the game's server traffic goes to bbport's own addresses again");
+    } catch (const std::exception& e) {
+        log(std::string("host_overrides.custom.json: ") + e.what());
+    }
 }
 
 // Once, when there is an account to play with: route bbport through bbbridge
@@ -404,6 +425,7 @@ void App::start_bridge() {
         return;
     }
     bridge_ = std::move(b);
+    sync_overrides();
 }
 
 void App::stop_bridge() {
@@ -411,6 +433,7 @@ void App::stop_bridge() {
     bridge_->stop();
     bridge_.reset();
     log("bridge stopped");
+    sync_overrides();
 }
 
 void App::play() {
@@ -554,6 +577,7 @@ void App::setup_panel() {
             if (routed) {
                 setup_->enable();
                 if (signed_in() && setup_->npid() != account_) setup_->set_npid(account_);
+                start_bridge();   // the game's server traffic needs it running
             } else {
                 setup_->disable();   // bbport's own shadNet server and account come back
             }

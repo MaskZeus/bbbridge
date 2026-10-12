@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.3.2 - 2026-10-12
+
+- **Fix: "Failed to acquire Bloodborne server information" after closing
+  bbbridge.** The file that sends the game's server traffic to bbbridge
+  (`host_overrides.custom.json` in bbport's user folder) now exists only while
+  bbbridge runs with the switch on The Hunter's Dream: it goes when bbbridge
+  closes, when the bridge stops, or when bbport is set back to shadNet - also
+  in the bbport launcher itself. One left behind by an older bbbridge
+  (including the Python 0.2.0) is cleaned up the next time bbbridge starts.
+- Troubleshooting notes in the README.
+
 ## 0.3.1 - 2026-10-12
 
 - **Online switch** in place of the "Route bbport through bbbridge" box:

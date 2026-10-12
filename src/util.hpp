@@ -21,7 +21,7 @@ namespace bb {
 
 using json = nlohmann::json;
 
-constexpr const char* kVersion = "0.3.1";
+constexpr const char* kVersion = "0.3.2";
 
 // ---- logging: "HH:MM:SS [bbbridge] msg" to stdout, the log file and the app ----
 void log(const std::string& msg);

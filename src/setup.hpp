@@ -5,9 +5,10 @@
 //  1. %APPDATA%\bbport-launcher\settings.json: online on; co-op server
 //     127.0.0.1:31313; WebAPI http://127.0.0.1:31315; extra variable
 //     SHADPS4_P2P_PORT=3658 (the bridge must know the port's P2P UDP port).
-//  2. <saves>\host_overrides.custom.json: the game's own server traffic goes
-//     through the bridge (the account token, and the play log to The Hunter's
-//     Dream instead of FromSoftware's closed upload bucket).
+//  2. <bbport user dir>\host_overrides.custom.json: the game's own server
+//     traffic goes through the bridge (the account token, and the play log to
+//     The Hunter's Dream instead of FromSoftware's closed upload bucket). Only
+//     while bbbridge runs: the app removes it when it closes.
 //  3. <bbport>\patches\bbbridge-live-map.xml (optional): play log every 5 s,
 //     position every 0.5 s - bbhost's own patch - for the site's live map.
 // The bbport launcher must be closed while settings.json changes: it rewrites
@@ -54,7 +55,9 @@ public:
     std::string server() const { return jstr(settings, "online_server"); }
     bool online() const { return jint(settings, "online", 0) != 0; }
     bool shadnet_account_set() const;   // a name and a real (not bbbridge's placeholder) password
-    bool routed() const;
+    bool routed() const;                // bbport's settings point at bbbridge
+    bool overrides_written() const;     // our host_overrides.custom.json is there
+    void set_overrides(bool on);        // only while bbbridge runs (see setup.cpp)
     bool patched() const;
     bool game_ready() const;   // the launcher has a game folder with eboot.bin
 

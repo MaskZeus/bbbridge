@@ -724,6 +724,17 @@ def part_e():
         with open(sfile, "w") as fh:
             json.dump(s, fh)
 
+    # the Python bbbridge's file is ours too: replaced, then removed - not kept as the player's
+    ovfile = os.path.join(user, "host_overrides.custom.json")
+    with open(ovfile, "w") as fh:
+        json.dump({"_note": "bbbridge: the game's own server traffic goes through the bridge",
+                   "https://thehuntersdream.com:20443": "http://127.0.0.1:31316"}, fh)
+    route(True)
+    route(False)
+    check("route off: an old (Python) bbbridge overrides file is removed, not restored",
+          not os.path.exists(ovfile) and not os.path.exists(ovfile + ".before-bbbridge"),
+          os.listdir(user))
+
     # the app puts the Hunter's Dream account in while routed; off brings the shadNet one back
     for name, pw in (("hunter_sn", "secret"), ("renamed_sn", "secret2")):   # also when changed in between
         set_settings(online_npid=name, online_password=pw)

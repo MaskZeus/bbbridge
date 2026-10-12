@@ -51,6 +51,21 @@ with your Discord sign-in; left, bbport's own shadNet - no sign-in needed.
 Running bbhost and bbport with the same account at the same time is not
 supported.
 
+## Troubleshooting
+
+- **"Failed to acquire Bloodborne server information" with bbbridge closed**:
+  bbbridge 0.3.1 and older (and the Python 0.2.0) left
+  `user\host_overrides.custom.json` in bbport's folder (bbport's user folder),
+  which sends the game's server traffic to bbbridge even when it is not
+  running. Start bbbridge 0.3.2 or newer once (it removes the file when it is
+  not needed), or delete that file by hand. From 0.3.2 the file exists only
+  while bbbridge runs with the switch on The Hunter's Dream.
+- **Nobody comes when I ring a bell**: a Small Resonant Bell is answered only
+  by a host ringing the Beckoning Bell in the same area, near your level (and
+  the other way round). The live map at
+  [thehuntersdream.com/map](https://thehuntersdream.com/map) shows who is
+  ringing which bell where.
+
 ## Building (Visual Studio 2022/2026)
 
 Workload **Desktop development with C++** (MSVC, Windows SDK, CMake tools).

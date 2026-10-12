@@ -83,9 +83,10 @@ std::string merge_env(const std::string& extra, const std::string& key, const st
     return out;
 }
 
+// Ours, or the Python bbbridge's (0.2.0: "_note": "bbbridge: ...").
 bool ours(const fs::path& overrides_file) {
     const ojson j = read_json(overrides_file);
-    return j.is_object() && j.contains(kMarker);
+    return j.is_object() && (j.contains(kMarker) || jstr(j, "_note").rfind("bbbridge:", 0) == 0);
 }
 
 }  // namespace
@@ -164,8 +165,26 @@ void BbportSetup::reload() {
 
 bool BbportSetup::routed() const {
     return jint(settings, "online", 0) && jstr(settings, "online_server") == kBridgeServer &&
-           jstr(settings, "online_webapi") == kBridgeWebapi && !jstr(settings, "online_password").empty() &&
-           ours(overrides_file());
+           jstr(settings, "online_webapi") == kBridgeWebapi && !jstr(settings, "online_password").empty();
+}
+
+bool BbportSetup::overrides_written() const { return ours(overrides_file()); }
+
+// bbport's run.py uses host_overrides.custom.json, when there is one, instead of
+// its own addresses: ours sends the game's server traffic to bbbridge, so it may
+// only be there while bbbridge runs - else the game cannot reach its server
+// ("Failed to acquire Bloodborne server information").
+void BbportSetup::set_overrides(bool on) {
+    std::error_code ec;
+    if (on) {
+        fs::create_directories(user_dir, ec);
+        if (fs::exists(overrides_file(), ec) && !ours(overrides_file())) backup(overrides_file());
+        write_json(overrides_file(), overrides());
+    } else if (ours(overrides_file())) {
+        fs::remove(overrides_file(), ec);
+        const fs::path prev = overrides_file().wstring() + widen(kBackup);
+        if (fs::exists(prev, ec)) fs::rename(prev, overrides_file(), ec);
+    }
 }
 
 bool BbportSetup::game_ready() const {
@@ -209,10 +228,7 @@ void BbportSetup::enable() {
     const std::string port = std::to_string(kP2pPort);
     settings["extra_env"] = merge_env(jstr(settings, "extra_env"), kP2pVar, &port);
     save_settings();
-    std::error_code ec;
-    fs::create_directories(user_dir, ec);
-    if (fs::exists(overrides_file(), ec) && !ours(overrides_file())) backup(overrides_file());
-    write_json(overrides_file(), overrides());
+    set_overrides(true);
 }
 
 void BbportSetup::disable() {
@@ -230,12 +246,7 @@ void BbportSetup::disable() {
     }
     settings["extra_env"] = merge_env(jstr(settings, "extra_env"), kP2pVar, nullptr);
     save_settings();
-    std::error_code ec;
-    if (ours(overrides_file())) {
-        fs::remove(overrides_file(), ec);
-        const fs::path prev = overrides_file().wstring() + widen(kBackup);
-        if (fs::exists(prev, ec)) fs::rename(prev, overrides_file(), ec);
-    }
+    set_overrides(false);
 }
 
 void BbportSetup::set_patch(bool on) {

@@ -41,8 +41,13 @@ E:\bloodborne\               bbport
    the bbport launcher (**bbport settings...**) or the in-game menu (Insert).
 
 Untick **Route bbport through bbbridge** to go back to bbport's own shadNet
-co-op pool. Running bbhost and bbport with the same account at the same time
-is not supported.
+co-op pool: bbport gets its own server and shadNet account back (the ones it
+had before routing; a shadNet account is registered at
+[shadnet.shadps4.net](https://shadnet.shadps4.net) and entered in the bbport
+launcher's *Online co-op*). PLAY follows the box: ticked, the bbhost pool with
+your Discord sign-in; unticked, bbport's own shadNet - no sign-in needed.
+Running bbhost and bbport with the same account at the same time is not
+supported.
 
 ## Building (Visual Studio 2022/2026)
 

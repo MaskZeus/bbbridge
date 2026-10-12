@@ -209,6 +209,8 @@ private:
     void use_npid(const std::string& npid);
     void apply_defaults();
     bool live_map_wanted() const { return jint(config_, "live_map", 1) != 0; }
+    bool route_wanted() const { return jint(config_, "route", 1) != 0; }   // the box, as last ticked; bbhost by default
+    bool signed_in() const { return !account_.empty() && !account_kind(state_path(), account_).empty(); }
     std::wstring state_path() const { return (dir_ / L"bbbridge_state.json").wstring(); }
     std::string auth_server() const { return jstr(config_, "auth_server", "https://thehuntersdream.com"); }
 
@@ -221,7 +223,9 @@ private:
     fs::path chosen_bbport_;
     fs::path bbport_dir_;   // known even when setup_ is not (no launcher settings yet)
     BbportSource bbport_source_ = BbportSource::None;
-    char npid_[64] = {};
+    // The Hunter's Dream account (bbbridge_config.json "account"). It is bbport's
+    // online id only while routed: unrouted, bbport keeps its own shadNet account.
+    std::string account_;
     bool launcher_running_ = false, game_running_ = false, routed_ = false, patched_ = false;
     double last_refresh_ = 0;
     std::string error_, folder_question_;
@@ -242,6 +246,7 @@ void App::load_config() {
         if (j.is_object()) config_ = j;
     }
     if (jhas(config_, "bbport_dir")) chosen_bbport_ = fs::path(widen(jstr(config_, "bbport_dir")));
+    account_ = jstr(config_, "account");
 }
 
 void App::save_config() {
@@ -254,8 +259,12 @@ void App::try_setup() {
         setup_error_.clear();
         bbport_dir_ = setup_->bbport;
         bbport_source_ = setup_->source;
-        const std::string n = setup_->npid();
-        strncpy_s(npid_, n.c_str(), _TRUNCATE);
+        // older bbbridge kept the account only as bbport's online id
+        if (account_.empty() && !account_kind(state_path(), setup_->npid()).empty()) {
+            account_ = setup_->npid();
+            config_["account"] = account_;
+            save_config();
+        }
     } catch (const std::exception& e) {
         setup_.reset();
         setup_error_ = e.what();
@@ -316,16 +325,12 @@ void App::refresh() {
     if (!setup_ && !launcher_running_ && bbport_source_ != BbportSource::None) try_setup();   // e.g. the launcher just made its settings
     if (setup_) {
         try {
-            if (!launcher_running_) {
-                setup_->reload();   // the launcher may have saved new settings
-                strncpy_s(npid_, setup_->npid().c_str(), _TRUNCATE);
-            }
+            if (!launcher_running_) setup_->reload();   // the launcher may have saved new settings
         } catch (...) {
         }
         routed_ = setup_->routed();
         patched_ = setup_->patched();
-        if (!jint(config_, "defaults_applied", 0) && !launcher_running_ && !game_running_ &&
-            !account_kind(state_path(), npid_).empty())
+        if (!jint(config_, "defaults_applied", 0) && !launcher_running_ && !game_running_ && signed_in())
             apply_defaults();
     }
     last_refresh_ = now();
@@ -337,12 +342,14 @@ void App::refresh() {
 void App::apply_defaults() {
     try {
         if (!routed_) setup_->enable();
+        if (setup_->npid() != account_) setup_->set_npid(account_);
         if (live_map_wanted() && !patched_) setup_->set_patch(true);
     } catch (const std::exception& e) {
         fail(std::string("Could not set bbport up: ") + e.what());
         return;
     }
     config_["defaults_applied"] = true;
+    config_["route"] = true;
     save_config();
     routed_ = setup_->routed();
     patched_ = setup_->patched();
@@ -376,8 +383,10 @@ void App::play() {
         fail(setup_error_);
         return;
     }
-    if (account_kind(state_path(), npid_).empty()) {
-        fail("Not signed in. Press 'Sign in with Discord...' first - The Hunter's Dream needs your own account.");
+    const bool via_bridge = route_wanted();
+    if (via_bridge && !signed_in()) {
+        fail("Not signed in. Press 'Sign in with Discord...' first - The Hunter's Dream needs your own account.\n\n"
+             "(To play in bbport's own shadNet pool instead, untick 'Route bbport through bbbridge'.)");
         return;
     }
     if (launcher_running_) {
@@ -390,20 +399,34 @@ void App::play() {
         return;
     }
     try {
-        if (std::string(npid_) != setup_->npid()) setup_->set_npid(npid_);
-        if (!routed_) setup_->enable();
-        if (live_map_wanted() && !patched_) setup_->set_patch(true);
+        if (via_bridge) {
+            if (!routed_) setup_->enable();
+            if (setup_->npid() != account_) setup_->set_npid(account_);
+            if (live_map_wanted() && !patched_) setup_->set_patch(true);
+        } else if (routed_) {
+            setup_->disable();   // e.g. the launcher was open when the box was unticked
+        }
     } catch (const std::exception& e) {
         fail(std::string("Could not set bbport up: ") + e.what());
         return;
     }
-    start_bridge();
-    if (!bridge_) return;
+    if (!via_bridge && setup_->online() && !setup_->shadnet_account_set()) {
+        fail("bbport's online play is on but it has no shadNet account.\n\nRegister one at "
+             "https://shadnet.shadps4.net, then press 'bbport settings...' > Online co-op and enter the account "
+             "name (not the email) and password. Or tick 'Route bbport through bbbridge' to play with bbhost "
+             "players using your Discord sign-in.");
+        return;
+    }
+    if (via_bridge) {
+        start_bridge();
+        if (!bridge_) return;
+    }
     if (const std::string err = launch(setup_->play_exe(), setup_->bbport); !err.empty()) {
         fail(err);
         return;
     }
-    log("starting the game: " + narrow(setup_->play_exe().wstring()));
+    log(fmt("starting the game (%s): %s", via_bridge ? "bbhost pool through bbbridge" : "bbport's own shadNet",
+            narrow(setup_->play_exe().wstring()).c_str()));
     refresh();
 }
 
@@ -489,14 +512,35 @@ void App::setup_panel() {
     bool routed = routed_;
     if (ImGui::Checkbox("Route bbport through bbbridge", &routed)) {
         try {
-            if (routed) setup_->enable();
-            else setup_->disable();
-            log(routed ? "bbport now uses bbbridge" : "bbport back on the public shadNet server");
+            if (routed) {
+                setup_->enable();
+                if (signed_in() && setup_->npid() != account_) setup_->set_npid(account_);
+            } else {
+                setup_->disable();   // bbport's own shadNet server and account come back
+            }
+            config_["route"] = routed;
+            save_config();
+            log(routed ? "bbport now uses bbbridge" : "bbport back on its own shadNet server and account");
         } catch (const std::exception& e) {
             fail(e.what());
         }
         refresh();
     }
+    ImGui::Indent();
+    if (routed_)
+        ImGui::TextDisabled(signed_in() ? "Co-op with bbhost players on The Hunter's Dream, as '%s'."
+                                        : "Co-op with bbhost players on The Hunter's Dream - sign in with Discord first.",
+                            account_.c_str());
+    else if (!setup_->online())
+        ImGui::TextDisabled("Unticked: bbport's own settings - online play is off there.");
+    else if (setup_->shadnet_account_set())
+        ImGui::TextDisabled("Unticked: bbport's own shadNet pool (%s), as '%s'.", setup_->server().c_str(),
+                            setup_->npid().c_str());
+    else
+        ImGui::TextColored(ImVec4(0.95f, 0.75f, 0.3f, 1),
+                           "Unticked: bbport's own shadNet pool needs a shadNet account (shadnet.shadps4.net),\n"
+                           "entered in bbport settings > Online co-op.");
+    ImGui::Unindent();
     bool patched = patched_;
     if (ImGui::Checkbox("Live map patch (show me on thehuntersdream.com's map)", &patched)) {
         setup_->set_patch(patched);
@@ -515,12 +559,11 @@ void App::setup_panel() {
 }
 
 void App::use_npid(const std::string& npid) {
-    strncpy_s(npid_, npid.c_str(), _TRUNCATE);
-    if (!setup_) return;
-    if (launcher_running_) {
-        fail("Close the bbport launcher, then sign in again to use '" + npid + "'.");
-        return;
-    }
+    account_ = npid;
+    config_["account"] = npid;
+    save_config();
+    // bbport's online id changes only while it plays through bbbridge (PLAY sets it too)
+    if (!setup_ || !routed_ || launcher_running_) return;
     try {
         setup_->set_npid(npid);
         log(fmt("online id set to '%s'", npid.c_str()));
@@ -531,14 +574,14 @@ void App::use_npid(const std::string& npid) {
 
 void App::account_row() {
     // Everyone signs in with their own Discord account on The Hunter's Dream;
-    // the account's name becomes bbport's online id (NPID).
-    const std::string kind = account_kind(state_path(), npid_);
+    // the account's name is bbport's online id (NPID) while routed.
+    const std::string kind = account_.empty() ? "" : account_kind(state_path(), account_);
     if (!kind.empty()) {
-        ImGui::TextColored(ImVec4(0.55f, 0.65f, 1.0f, 1), "Signed in as '%s'%s", npid_,
+        ImGui::TextColored(ImVec4(0.55f, 0.65f, 1.0f, 1), "Signed in as '%s'%s", account_.c_str(),
                            kind == "discord" ? " (Discord)" : " (bbbridge account)");
         ImGui::BeginDisabled(launcher_running_);
         if (ImGui::Button("Website sign-in code")) {
-            web_code_ = website_code(auth_server(), state_path(), npid_, web_error_);
+            web_code_ = website_code(auth_server(), state_path(), account_, web_error_);
             open_web_ = true;
         }
         if (ImGui::IsItemHovered())
@@ -551,8 +594,14 @@ void App::account_row() {
         }
         ImGui::SameLine();
         if (ImGui::Button("Sign out")) {
-            const std::string err = account_sign_out(auth_server(), state_path(), npid_);
-            if (!err.empty()) fail("Sign out failed: " + err);
+            const std::string err = account_sign_out(auth_server(), state_path(), account_);
+            if (!err.empty()) {
+                fail("Sign out failed: " + err);
+            } else {
+                account_.clear();
+                config_.erase("account");
+                save_config();
+            }
         }
         ImGui::EndDisabled();
         return;
@@ -622,7 +671,8 @@ void App::account_popups() {
         if (web_code_.empty()) {
             ImGui::TextColored(ImVec4(0.95f, 0.5f, 0.4f, 1), "No code: %s", web_error_.c_str());
         } else {
-            ImGui::Text("For thehuntersdream.com/account, 'Sign in with a code from the game' (account '%s'):", npid_);
+            ImGui::Text("For thehuntersdream.com/account, 'Sign in with a code from the game' (account '%s'):",
+                        account_.c_str());
             ImGui::SetWindowFontScale(2.2f);
             ImGui::TextColored(ImVec4(0.95f, 0.85f, 0.5f, 1), "   %s", web_code_.c_str());
             ImGui::SetWindowFontScale(1.0f);

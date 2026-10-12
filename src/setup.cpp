@@ -189,7 +189,16 @@ void BbportSetup::set_npid(const std::string& npid) {
     save_settings();
 }
 
+bool BbportSetup::shadnet_account_set() const {
+    const std::string pw = jstr(settings, "online_password");
+    return !npid().empty() && !pw.empty() && pw != kPlaceholderPassword;
+}
+
 void BbportSetup::enable() {
+    // On bbport's own server now: keep that setup (server, shadNet account) for disable(),
+    // also when the player changed it since the last time.
+    if (jstr(settings, "online_server") != kBridgeServer)
+        write_json(settings_file.wstring() + widen(kBackup), settings);
     settings["online"] = true;
     settings["online_server"] = kBridgeServer;
     settings["online_webapi"] = kBridgeWebapi;
@@ -214,6 +223,7 @@ void BbportSetup::disable() {
     if (webapi == kBridgeWebapi) webapi.clear();
     settings["online_server"] = server;
     settings["online_webapi"] = webapi;
+    if (jhas(old, "online_npid")) settings["online_npid"] = jstr(old, "online_npid");   // the shadNet account, not The Hunter's Dream's
     if (jstr(settings, "online_password") == kPlaceholderPassword) {   // ours: back to what it was
         const std::string before = jstr(old, "online_password");
         settings["online_password"] = before == kPlaceholderPassword ? "" : before;

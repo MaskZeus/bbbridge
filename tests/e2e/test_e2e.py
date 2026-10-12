@@ -718,6 +718,23 @@ def part_e():
     check("a real shadNet password is left alone", on_pw == "secret" and settings()["online_password"] == "secret",
           (on_pw, settings()["online_password"]))
 
+    def set_settings(**kv):
+        s = settings()
+        s.update(kv)
+        with open(sfile, "w") as fh:
+            json.dump(s, fh)
+
+    # the app puts the Hunter's Dream account in while routed; off brings the shadNet one back
+    for name, pw in (("hunter_sn", "secret"), ("renamed_sn", "secret2")):   # also when changed in between
+        set_settings(online_npid=name, online_password=pw)
+        route(True)
+        set_settings(online_npid="discord_name")
+        route(False)
+        s = settings()
+        check("route off: the shadNet account comes back (%s)" % name,
+              s["online_npid"] == name and s["online_password"] == pw and s["online_server"] == "srv.shadps4.net:31313",
+              (s["online_npid"], s["online_server"]))
+
 
 def main():
     print("== bbbridge C++ end-to-end (%s) ==" % os.path.abspath(EXE))

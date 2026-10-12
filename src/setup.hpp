@@ -1,4 +1,6 @@
 // Points an installed bbport (bloodborne_pc for Windows) at the bridge, or back.
+// Turning it on keeps bbport's own shadNet setup (server, account) in
+// settings.json.before-bbbridge; turning it off puts that back.
 // "Routed" means (a backup of every file is kept as *.before-bbbridge):
 //  1. %APPDATA%\bbport-launcher\settings.json: online on; co-op server
 //     127.0.0.1:31313; WebAPI http://127.0.0.1:31315; extra variable
@@ -49,6 +51,9 @@ public:
     nlohmann::ordered_json settings;   // the launcher's file, key order kept
 
     std::string npid() const { return jstr(settings, "online_npid"); }
+    std::string server() const { return jstr(settings, "online_server"); }
+    bool online() const { return jint(settings, "online", 0) != 0; }
+    bool shadnet_account_set() const;   // a name and a real (not bbbridge's placeholder) password
     bool routed() const;
     bool patched() const;
     bool game_ready() const;   // the launcher has a game folder with eboot.bin

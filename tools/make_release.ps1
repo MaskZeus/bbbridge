@@ -16,7 +16,7 @@ $version = (Select-String -Path "$root\CMakeLists.txt" -Pattern 'project\(bbbrid
 $stage = Join-Path $root "dist\stage\bbbridge"
 Remove-Item (Join-Path $root 'dist\stage') -Recurse -Force -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force $stage | Out-Null
-Copy-Item "$root\build\x64-release\bbbridge.exe", "$root\README.md", "$root\LICENSE", "$root\THIRD_PARTY_NOTICES.txt" $stage
+Copy-Item "$root\build\x64-release\bbbridge.exe", "$root\README.md", "$root\CHANGELOG.md", "$root\LICENSE", "$root\THIRD_PARTY_NOTICES.txt" $stage
 $zip = Join-Path $root "dist\bbbridge-$version-windows.zip"
 Remove-Item $zip -Force -ErrorAction SilentlyContinue
 Compress-Archive -Path $stage -DestinationPath $zip

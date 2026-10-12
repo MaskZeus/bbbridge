@@ -34,18 +34,20 @@ E:\bloodborne\               bbport
    sign in there with your Discord account and approve the code. Your account
    there (the same one bbhost uses) becomes bbport's online id. No password is
    stored; the account's token goes to `bbbridge_state.json`.
-3. Tick **Route bbport through bbbridge** (and the live map patch if you like).
+3. The **Online** switch goes to **The Hunter's Dream (bbhost)** by itself
+   once you are signed in (and the live map patch is added; untick it if you
+   like).
 4. Press **PLAY**. The app starts the bridge if needed and launches the game
    with bbport's saved settings. You can also start the game from the bbport
    launcher - as long as bbbridge is open. Graphics, mods and cheats stay in
    the bbport launcher (**bbport settings...**) or the in-game menu (Insert).
 
-Untick **Route bbport through bbbridge** to go back to bbport's own shadNet
+Move the **Online** switch to **shadNet** to go back to bbport's own shadNet
 co-op pool: bbport gets its own server and shadNet account back (the ones it
-had before routing; a shadNet account is registered at
+had before; a shadNet account is registered at
 [shadnet.shadps4.net](https://shadnet.shadps4.net) and entered in the bbport
-launcher's *Online co-op*). PLAY follows the box: ticked, the bbhost pool with
-your Discord sign-in; unticked, bbport's own shadNet - no sign-in needed.
+launcher's *Online co-op*). PLAY follows the switch: right, the bbhost pool
+with your Discord sign-in; left, bbport's own shadNet - no sign-in needed.
 Running bbhost and bbport with the same account at the same time is not
 supported.
 

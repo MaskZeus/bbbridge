@@ -38,8 +38,8 @@ const char* kPatchXml = R"xml(<?xml version="1.0"?>
 )xml";
 
 nlohmann::ordered_json overrides() {
-    return {{kMarker, "Written by bbbridge: the game's server traffic goes through bbbridge. Turn off 'Route "
-                      "bbport through bbbridge' in bbbridge to remove."},
+    return {{kMarker, "Written by bbbridge: the game's server traffic goes through bbbridge. Move bbbridge's "
+                      "Online switch to shadNet to remove."},
             {"https://ss4.scej-network.jp:20443", "http://127.0.0.1:31316"},
             {"https://thehuntersdream.com:20443", "http://127.0.0.1:31316"},
             {"https://thehuntersdream.com:18671", "http://127.0.0.1:31317"},

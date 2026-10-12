@@ -132,6 +132,42 @@ std::string launch(const fs::path& exe, const fs::path& cwd) {
     return "";
 }
 
+// A two-way switch: "left" label, the switch, "right" label; *right is the
+// state. The switch and either label change it. True when changed.
+bool network_switch(const char* id, const char* left, const char* right, bool* on) {
+    const ImVec4 lit(0.95f, 0.95f, 0.95f, 1), dim(0.5f, 0.5f, 0.5f, 1);
+    const ImVec4 left_track(0.22f, 0.42f, 0.62f, 1), right_track(0.62f, 0.16f, 0.16f, 1);
+    bool changed = false;
+    ImGui::PushID(id);
+    ImGui::AlignTextToFramePadding();
+    ImGui::TextColored(*on ? dim : lit, "%s", left);
+    if (ImGui::IsItemClicked() && *on) *on = false, changed = true;
+    ImGui::SameLine();
+    const float h = ImGui::GetFrameHeight(), w = h * 2.1f;
+    const ImVec2 p = ImGui::GetCursorScreenPos();
+    if (ImGui::InvisibleButton("switch", ImVec2(w, h))) *on = !*on, changed = true;
+    const bool hovered = ImGui::IsItemHovered();
+    // slide the knob over ~0.12 s
+    ImGuiStorage* store = ImGui::GetStateStorage();
+    const ImGuiID key = ImGui::GetID("t");
+    float t = store->GetFloat(key, *on ? 1.0f : 0.0f);
+    const float step = ImGui::GetIO().DeltaTime / 0.12f;
+    t = *on ? (t + step > 1 ? 1 : t + step) : (t - step < 0 ? 0 : t - step);
+    store->SetFloat(key, t);
+    ImVec4 track(left_track.x + (right_track.x - left_track.x) * t, left_track.y + (right_track.y - left_track.y) * t,
+                 left_track.z + (right_track.z - left_track.z) * t, 1);
+    if (hovered) track = ImVec4(track.x * 1.15f, track.y * 1.15f, track.z * 1.15f, 1);
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    dl->AddRectFilled(p, ImVec2(p.x + w, p.y + h), ImGui::GetColorU32(track), h * 0.5f);
+    const float r = h * 0.5f - 3;
+    dl->AddCircleFilled(ImVec2(p.x + r + 3 + t * (w - 2 * r - 6), p.y + h * 0.5f), r, ImGui::GetColorU32(lit));
+    ImGui::SameLine();
+    ImGui::TextColored(*on ? lit : dim, "%s", right);
+    if (ImGui::IsItemClicked() && !*on) *on = true, changed = true;
+    ImGui::PopID();
+    return changed;
+}
+
 std::optional<fs::path> pick_folder(HWND owner) {
     std::optional<fs::path> out;
     IFileOpenDialog* dlg = nullptr;
@@ -338,7 +374,7 @@ void App::refresh() {
 
 // Once, when there is an account to play with: route bbport through bbbridge
 // and add the live map patch, so starting from the bbport launcher works too
-// and nobody has to remember the ticks. Unticking them later sticks.
+// and nobody has to remember them. Switching them off later sticks.
 void App::apply_defaults() {
     try {
         if (!routed_) setup_->enable();
@@ -386,7 +422,7 @@ void App::play() {
     const bool via_bridge = route_wanted();
     if (via_bridge && !signed_in()) {
         fail("Not signed in. Press 'Sign in with Discord...' first - The Hunter's Dream needs your own account.\n\n"
-             "(To play in bbport's own shadNet pool instead, untick 'Route bbport through bbbridge'.)");
+             "(To play in bbport's own shadNet pool instead, move the Online switch to shadNet.)");
         return;
     }
     if (launcher_running_) {
@@ -404,7 +440,7 @@ void App::play() {
             if (setup_->npid() != account_) setup_->set_npid(account_);
             if (live_map_wanted() && !patched_) setup_->set_patch(true);
         } else if (routed_) {
-            setup_->disable();   // e.g. the launcher was open when the box was unticked
+            setup_->disable();   // e.g. the launcher was open when the switch moved
         }
     } catch (const std::exception& e) {
         fail(std::string("Could not set bbport up: ") + e.what());
@@ -413,8 +449,8 @@ void App::play() {
     if (!via_bridge && setup_->online() && !setup_->shadnet_account_set()) {
         fail("bbport's online play is on but it has no shadNet account.\n\nRegister one at "
              "https://shadnet.shadps4.net, then press 'bbport settings...' > Online co-op and enter the account "
-             "name (not the email) and password. Or tick 'Route bbport through bbbridge' to play with bbhost "
-             "players using your Discord sign-in.");
+             "name (not the email) and password. Or move the Online switch to The Hunter's Dream "
+             "to play with bbhost players using your Discord sign-in.");
         return;
     }
     if (via_bridge) {
@@ -510,7 +546,10 @@ void App::setup_panel() {
     account_row();
     ImGui::BeginDisabled(launcher_running_);
     bool routed = routed_;
-    if (ImGui::Checkbox("Route bbport through bbbridge", &routed)) {
+    ImGui::AlignTextToFramePadding();
+    ImGui::TextUnformatted("Online:");
+    ImGui::SameLine();
+    if (network_switch("network", "shadNet", "The Hunter's Dream (bbhost)", &routed)) {
         try {
             if (routed) {
                 setup_->enable();
@@ -526,20 +565,23 @@ void App::setup_panel() {
         }
         refresh();
     }
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Right: bbbridge connects bbport to The Hunter's Dream (bbhost players, Discord sign-in).\n"
+                          "Left: bbport's own shadNet server and account, without bbbridge.");
     ImGui::Indent();
     if (routed_)
-        ImGui::TextDisabled(signed_in() ? "Co-op with bbhost players on The Hunter's Dream, as '%s'."
-                                        : "Co-op with bbhost players on The Hunter's Dream - sign in with Discord first.",
+        ImGui::TextDisabled(signed_in() ? "Co-op with bbhost players through bbbridge, as '%s'."
+                                        : "Co-op with bbhost players through bbbridge - sign in with Discord first.",
                             account_.c_str());
     else if (!setup_->online())
-        ImGui::TextDisabled("Unticked: bbport's own settings - online play is off there.");
+        ImGui::TextDisabled("bbport's own settings - online play is off there.");
     else if (setup_->shadnet_account_set())
-        ImGui::TextDisabled("Unticked: bbport's own shadNet pool (%s), as '%s'.", setup_->server().c_str(),
+        ImGui::TextDisabled("bbport's own shadNet pool (%s), as '%s'.", setup_->server().c_str(),
                             setup_->npid().c_str());
     else
         ImGui::TextColored(ImVec4(0.95f, 0.75f, 0.3f, 1),
-                           "Unticked: bbport's own shadNet pool needs a shadNet account (shadnet.shadps4.net),\n"
-                           "entered in bbport settings > Online co-op.");
+                           "shadNet needs a shadNet account (shadnet.shadps4.net), entered in\n"
+                           "bbport settings > Online co-op.");
     ImGui::Unindent();
     bool patched = patched_;
     if (ImGui::Checkbox("Live map patch (show me on thehuntersdream.com's map)", &patched)) {

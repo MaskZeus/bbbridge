@@ -26,7 +26,10 @@ E:\bloodborne\               bbport
 
 ## Using it
 
-1. Start `bbbridge.exe` (close the bbport launcher first).
+1. Put the `bbbridge` folder inside bbport's folder (next to `Bloodborne.exe`)
+   and start `bbbridge.exe` (close the bbport launcher first). bbbridge uses
+   the bbport it sits in; anywhere else it asks which bbport to use
+   (**Change...** picks another one later).
 2. **Sign in with Discord**: the app shows a code and opens The Hunter's Dream;
    sign in there with your Discord account and approve the code. Your account
    there (the same one bbhost uses) becomes bbport's online id. No password is

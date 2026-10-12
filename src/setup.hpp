@@ -30,13 +30,22 @@ bool launcher_running();   // Bloodborne.exe
 bool game_running();       // Play Bloodborne.exe / bb-probe.exe
 bool is_bbport_dir(const fs::path& dir);
 
+// Where bbport was found, in this order: the folder the player chose, the
+// folder bbbridge's own folder is in (the normal install), bbbridge's own folder
+// (bbbridge.exe next to Bloodborne.exe), the launcher's game folder.
+enum class BbportSource { None, Chosen, ExeFolder, Launcher };
+fs::path find_bbport(const fs::path& exe_dir, const fs::path& chosen, const std::string& game_dir,
+                     BbportSource* source);
+std::string describe(BbportSource source);
+
 class BbportSetup {
 public:
-    // bbport_dir: "" = from the launcher's settings, or the folder above this exe.
+    // bbport_dir: "" = the folder above this exe, or from the launcher's settings.
     explicit BbportSetup(const fs::path& exe_dir, const fs::path& bbport_dir = {});
     void reload();
 
     fs::path bbport, settings_file, user_dir, patches_dir;
+    BbportSource source = BbportSource::None;
     nlohmann::ordered_json settings;   // the launcher's file, key order kept
 
     std::string npid() const { return jstr(settings, "online_npid"); }

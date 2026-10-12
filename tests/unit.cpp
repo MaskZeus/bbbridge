@@ -1,12 +1,14 @@
 // Byte-level unit tests: the same checks as the Python bridge's test_p2p.py
 // part 1, plus protobuf and the account id (values the Python bridge produced).
 #include <cstdio>
+#include <fstream>
 #include <string>
 #include <vector>
 
 #include "bridge.hpp"
 #include "p2p.hpp"
 #include "proto3.hpp"
+#include "setup.hpp"
 #include "shadnet.hpp"
 
 using namespace bb;
@@ -171,6 +173,32 @@ int main() {
           std::to_string(account_id_for("porthost")));
     check("account id matches the Python bridge (tester01)", account_id_for("tester01") == 4533768973479740ull,
           std::to_string(account_id_for("tester01")));
+
+    // where bbport is found: chosen > the folder bbbridge is in > the launcher's game folder
+    {
+        const fs::path root = fs::temp_directory_path() / L"bbbridge-unit-find";
+        std::error_code ec;
+        fs::remove_all(root, ec);
+        const fs::path port = root / L"bloodborne", other = root / L"other", games = root / L"games";
+        for (const auto& d : {port / L"bbbridge", other, games / L"CUSA03173"}) fs::create_directories(d);
+        std::ofstream(port / L"Bloodborne.exe") << "x";
+        std::ofstream(games / L"Play Bloodborne.exe") << "x";
+        const std::string game_dir = narrow((games / L"CUSA03173").wstring());
+        BbportSource src{};
+        check("bbport: the folder bbbridge is in",
+              find_bbport(port / L"bbbridge", {}, game_dir, &src) == port && src == BbportSource::ExeFolder);
+        check("bbport: bbbridge.exe right next to Bloodborne.exe",
+              find_bbport(port, {}, "", &src) == port && src == BbportSource::ExeFolder);
+        check("bbport: a chosen folder that is gone falls back",
+              find_bbport(port / L"bbbridge", other, game_dir, &src) == port && src == BbportSource::ExeFolder);
+        check("bbport: the chosen folder wins",
+              find_bbport(port / L"bbbridge", games, "", &src) == games && src == BbportSource::Chosen);
+        check("bbport: from the launcher's game folder",
+              find_bbport(other / L"bbbridge", {}, game_dir, &src) == games && src == BbportSource::Launcher);
+        check("bbport: not found",
+              find_bbport(other / L"bbbridge", {}, "", &src).empty() && src == BbportSource::None);
+        fs::remove_all(root, ec);
+    }
 
     std::printf("\n%d passed, %d failed\n", g_pass, g_fail);
     return g_fail ? 1 : 0;

@@ -109,16 +109,27 @@ fs::path exe_dir() {
     return fs::path(buf).parent_path();
 }
 
-bool launch(const fs::path& exe, const fs::path& cwd) {
+// "" when started, else why not
+std::string launch(const fs::path& exe, const fs::path& cwd) {
+    std::error_code ec;
+    if (!fs::is_regular_file(exe, ec)) return narrow(exe.wstring()) + " is missing.";
     STARTUPINFOW si{};
     si.cb = sizeof(si);
     PROCESS_INFORMATION pi{};
     std::wstring cmd = L"\"" + exe.wstring() + L"\"";
-    if (!CreateProcessW(exe.c_str(), cmd.data(), nullptr, nullptr, FALSE, 0, nullptr, cwd.c_str(), &si, &pi))
-        return false;
+    if (!CreateProcessW(exe.c_str(), cmd.data(), nullptr, nullptr, FALSE, 0, nullptr, cwd.c_str(), &si, &pi)) {
+        const DWORD err = GetLastError();
+        wchar_t* text = nullptr;
+        FormatMessageW(FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
+                       nullptr, err, 0, reinterpret_cast<wchar_t*>(&text), 0, nullptr);
+        std::string why = text ? narrow(text) : fmt("error %lu", err);
+        if (text) LocalFree(text);
+        while (!why.empty() && (why.back() == '\n' || why.back() == '\r' || why.back() == '.')) why.pop_back();
+        return "Could not start " + narrow(exe.wstring()) + ": " + why + ".";
+    }
     CloseHandle(pi.hThread);
     CloseHandle(pi.hProcess);
-    return true;
+    return "";
 }
 
 std::optional<fs::path> pick_folder(HWND owner) {
@@ -156,7 +167,10 @@ public:
         });
         load_config();
         reload_setup();
-        log(fmt("bbbridge %s - %s", kVersion, setup_ ? "bbport found" : "bbport not found yet"));
+        log(fmt("bbbridge %s - bbport: %s (%s)", kVersion, bbport_dir_.empty() ? "-" : narrow(bbport_dir_.wstring()).c_str(),
+                describe(bbport_source_).c_str()));
+        if (!setup_error_.empty()) log(setup_error_);
+        check_folder_on_start();
         if (setup_ && setup_->routed()) start_bridge();   // routed already: be ready when the game starts
     }
 
@@ -176,17 +190,25 @@ public:
 private:
     void load_config();
     void save_config();
+    void try_setup();
     void reload_setup();
     void refresh();
+    void check_folder_on_start();
+    void choose_folder();
     void start_bridge();
     void stop_bridge();
     void play();
+    void open_launcher();
+    void fail(const std::string& message);
     void status_panel();
     void setup_panel();
     void account_row();
     void account_popups();
+    void message_popups();
     void log_panel();
     void use_npid(const std::string& npid);
+    void apply_defaults();
+    bool live_map_wanted() const { return jint(config_, "live_map", 1) != 0; }
     std::wstring state_path() const { return (dir_ / L"bbbridge_state.json").wstring(); }
     std::string auth_server() const { return jstr(config_, "auth_server", "https://thehuntersdream.com"); }
 
@@ -197,10 +219,13 @@ private:
     std::optional<BbportSetup> setup_;
     std::string setup_error_;
     fs::path chosen_bbport_;
+    fs::path bbport_dir_;   // known even when setup_ is not (no launcher settings yet)
+    BbportSource bbport_source_ = BbportSource::None;
     char npid_[64] = {};
     bool launcher_running_ = false, game_running_ = false, routed_ = false, patched_ = false;
     double last_refresh_ = 0;
-    std::string notice_;
+    std::string error_, folder_question_;
+    bool open_error_ = false, open_folder_ = false;
     bool confirm_close_ = false;
     std::unique_ptr<DiscordLink> link_;
     bool open_link_ = false, open_web_ = false;
@@ -223,22 +248,72 @@ void App::save_config() {
     std::ofstream(dir_ / L"bbbridge_config.json", std::ios::trunc) << config_.dump(2) << "\n";
 }
 
-void App::reload_setup() {
+void App::try_setup() {
     try {
         setup_.emplace(dir_, chosen_bbport_);
         setup_error_.clear();
+        bbport_dir_ = setup_->bbport;
+        bbport_source_ = setup_->source;
         const std::string n = setup_->npid();
         strncpy_s(npid_, n.c_str(), _TRUNCATE);
     } catch (const std::exception& e) {
         setup_.reset();
         setup_error_ = e.what();
+        bbport_dir_ = find_bbport(dir_, chosen_bbport_, "", &bbport_source_);   // still lets "bbport settings..." work
     }
+}
+
+void App::reload_setup() {
+    try_setup();
     refresh();
+}
+
+// The first look: say where bbport is unless bbbridge sits inside it (the
+// normal install), and ask when it had to guess or a chosen folder is gone.
+void App::check_folder_on_start() {
+    const std::string here = narrow(bbport_dir_.wstring());
+    if (bbport_source_ == BbportSource::None) {
+        folder_question_ = "bbport was not found.\n\nPut the bbbridge folder inside bbport's folder (the one with "
+                           "Bloodborne.exe), e.g. bloodborne\\bbbridge\\bbbridge.exe, or choose the bbport folder.";
+    } else if (!chosen_bbport_.empty() && bbport_source_ != BbportSource::Chosen) {
+        folder_question_ = "The bbport folder you chose before has no Bloodborne.exe any more:\n  " +
+                           narrow(chosen_bbport_.wstring()) + "\n\nbbbridge found bbport here instead (" +
+                           describe(bbport_source_) + "):\n  " + here + "\n\nUse this folder?";
+    } else if (bbport_source_ == BbportSource::Launcher) {
+        folder_question_ = "bbbridge is not inside a bbport folder. The bbport launcher points to this one:\n  " + here +
+                           "\n\nUse this folder?";
+    } else {
+        return;
+    }
+    open_folder_ = true;
+}
+
+void App::choose_folder() {
+    auto p = pick_folder(hwnd_);
+    if (!p) return;
+    if (!is_bbport_dir(*p)) {
+        fail(narrow(p->wstring()) + " is not a bbport folder: it has no Bloodborne.exe or Play Bloodborne.exe.\n\n"
+             "Choose the folder that has Bloodborne.exe in it.");
+        return;
+    }
+    chosen_bbport_ = *p;
+    config_["bbport_dir"] = narrow(p->wstring());
+    save_config();
+    reload_setup();
+    log("bbport folder: " + narrow(p->wstring()));
+    if (!setup_error_.empty()) fail(setup_error_);
+}
+
+void App::fail(const std::string& message) {
+    log("error: " + message);
+    error_ = message;
+    open_error_ = true;
 }
 
 void App::refresh() {
     launcher_running_ = launcher_running();
     game_running_ = game_running();
+    if (!setup_ && !launcher_running_ && bbport_source_ != BbportSource::None) try_setup();   // e.g. the launcher just made its settings
     if (setup_) {
         try {
             if (!launcher_running_) {
@@ -249,8 +324,30 @@ void App::refresh() {
         }
         routed_ = setup_->routed();
         patched_ = setup_->patched();
+        if (!jint(config_, "defaults_applied", 0) && !launcher_running_ && !game_running_ &&
+            !account_kind(state_path(), npid_).empty())
+            apply_defaults();
     }
     last_refresh_ = now();
+}
+
+// Once, when there is an account to play with: route bbport through bbbridge
+// and add the live map patch, so starting from the bbport launcher works too
+// and nobody has to remember the ticks. Unticking them later sticks.
+void App::apply_defaults() {
+    try {
+        if (!routed_) setup_->enable();
+        if (live_map_wanted() && !patched_) setup_->set_patch(true);
+    } catch (const std::exception& e) {
+        fail(std::string("Could not set bbport up: ") + e.what());
+        return;
+    }
+    config_["defaults_applied"] = true;
+    save_config();
+    routed_ = setup_->routed();
+    patched_ = setup_->patched();
+    log("bbport now uses bbbridge" + std::string(patched_ ? ", with the live map patch" : ""));
+    if (routed_) start_bridge();
 }
 
 void App::start_bridge() {
@@ -260,11 +357,10 @@ void App::start_bridge() {
     auto b = std::make_unique<Bridge>(cfg);
     std::string error;
     if (!b->start(&error)) {
-        notice_ = "The bridge could not start: " + error;
+        fail("The bridge could not start: " + error);
         return;
     }
     bridge_ = std::move(b);
-    notice_.clear();
 }
 
 void App::stop_bridge() {
@@ -275,26 +371,57 @@ void App::stop_bridge() {
 }
 
 void App::play() {
-    if (!setup_) return;
+    refresh();
+    if (!setup_) {
+        fail(setup_error_);
+        return;
+    }
+    if (account_kind(state_path(), npid_).empty()) {
+        fail("Not signed in. Press 'Sign in with Discord...' first - The Hunter's Dream needs your own account.");
+        return;
+    }
     if (launcher_running_) {
-        notice_ = "Close the bbport launcher first - it would undo bbbridge's settings when it saves.";
+        fail("Close the bbport launcher first - it would undo bbbridge's settings when it saves.");
+        return;
+    }
+    if (!setup_->game_ready()) {
+        fail("bbport has no game folder yet. Press 'bbport settings...', choose your Bloodborne folder "
+             "(CUSA03173, the one with eboot.bin), close the launcher, then press PLAY.");
         return;
     }
     try {
         if (std::string(npid_) != setup_->npid()) setup_->set_npid(npid_);
         if (!routed_) setup_->enable();
+        if (live_map_wanted() && !patched_) setup_->set_patch(true);
     } catch (const std::exception& e) {
-        notice_ = std::string("Could not set bbport up: ") + e.what();
+        fail(std::string("Could not set bbport up: ") + e.what());
         return;
     }
     start_bridge();
     if (!bridge_) return;
-    if (!launch(setup_->play_exe(), setup_->bbport)) {
-        notice_ = "Could not start " + narrow(setup_->play_exe().wstring());
+    if (const std::string err = launch(setup_->play_exe(), setup_->bbport); !err.empty()) {
+        fail(err);
         return;
     }
     log("starting the game: " + narrow(setup_->play_exe().wstring()));
     refresh();
+}
+
+void App::open_launcher() {
+    refresh();
+    if (bbport_dir_.empty()) {
+        fail("bbport was not found. Press 'Choose bbport folder...' and pick the folder with Bloodborne.exe.");
+        return;
+    }
+    if (launcher_running_) {
+        fail("The bbport launcher is already open.");
+        return;
+    }
+    if (game_running_) {
+        fail("The game is running - close it before changing bbport's settings.");
+        return;
+    }
+    if (const std::string err = launch(bbport_dir_ / L"Bloodborne.exe", bbport_dir_); !err.empty()) fail(err);
 }
 
 void App::status_panel() {
@@ -338,29 +465,21 @@ void App::status_panel() {
 
 void App::setup_panel() {
     ImGui::SeparatorText("Setup");
-    if (!setup_) {
-        ImGui::TextColored(ImVec4(0.95f, 0.5f, 0.4f, 1), "%s", setup_error_.c_str());
-        if (ImGui::Button("Choose bbport folder...")) {
-            if (auto p = pick_folder(hwnd_)) {
-                chosen_bbport_ = *p;
-                config_["bbport_dir"] = narrow(p->wstring());
-                save_config();
-                reload_setup();
-            }
-        }
-        return;
+    if (!bbport_dir_.empty()) {
+        ImGui::Text("bbport:");
+        ImGui::SameLine();
+        ImGui::TextUnformatted(narrow(bbport_dir_.wstring()).c_str());
+        ImGui::SameLine();
+        ImGui::TextDisabled("(%s)", describe(bbport_source_).c_str());
+        ImGui::SameLine();
+        if (ImGui::SmallButton("Change...")) choose_folder();
     }
-    ImGui::Text("bbport:");
-    ImGui::SameLine();
-    ImGui::TextDisabled("%s", narrow(setup_->bbport.wstring()).c_str());
-    ImGui::SameLine();
-    if (ImGui::SmallButton("Change...")) {
-        if (auto p = pick_folder(hwnd_)) {
-            chosen_bbport_ = *p;
-            config_["bbport_dir"] = narrow(p->wstring());
-            save_config();
-            reload_setup();
-        }
+    if (!setup_) {
+        ImGui::PushTextWrapPos(0);
+        ImGui::TextColored(ImVec4(0.95f, 0.5f, 0.4f, 1), "%s", setup_error_.c_str());
+        ImGui::PopTextWrapPos();
+        if (bbport_dir_.empty() && ImGui::Button("Choose bbport folder...")) choose_folder();
+        return;
     }
     if (!setup_->game_ready())
         ImGui::TextColored(ImVec4(0.95f, 0.75f, 0.3f, 1),
@@ -374,13 +493,15 @@ void App::setup_panel() {
             else setup_->disable();
             log(routed ? "bbport now uses bbbridge" : "bbport back on the public shadNet server");
         } catch (const std::exception& e) {
-            notice_ = e.what();
+            fail(e.what());
         }
         refresh();
     }
     bool patched = patched_;
     if (ImGui::Checkbox("Live map patch (show me on thehuntersdream.com's map)", &patched)) {
         setup_->set_patch(patched);
+        config_["live_map"] = patched;   // PLAY keeps to it
+        save_config();
         refresh();
     }
     ImGui::EndDisabled();
@@ -397,14 +518,14 @@ void App::use_npid(const std::string& npid) {
     strncpy_s(npid_, npid.c_str(), _TRUNCATE);
     if (!setup_) return;
     if (launcher_running_) {
-        notice_ = "Close the bbport launcher, then sign in again to use '" + npid + "'.";
+        fail("Close the bbport launcher, then sign in again to use '" + npid + "'.");
         return;
     }
     try {
         setup_->set_npid(npid);
         log(fmt("online id set to '%s'", npid.c_str()));
     } catch (const std::exception& e) {
-        notice_ = e.what();
+        fail(e.what());
     }
 }
 
@@ -431,7 +552,7 @@ void App::account_row() {
         ImGui::SameLine();
         if (ImGui::Button("Sign out")) {
             const std::string err = account_sign_out(auth_server(), state_path(), npid_);
-            notice_ = err.empty() ? "" : "Sign out failed: " + err;
+            if (!err.empty()) fail("Sign out failed: " + err);
         }
         ImGui::EndDisabled();
         return;
@@ -517,6 +638,53 @@ void App::account_popups() {
     }
 }
 
+void App::message_popups() {
+    const float wrap = ImGui::GetFontSize() * 34;
+    if (open_folder_) {
+        ImGui::OpenPopup("bbport folder");
+        open_folder_ = false;
+    }
+    if (ImGui::BeginPopupModal("bbport folder", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+        ImGui::PushTextWrapPos(wrap);
+        ImGui::TextUnformatted(folder_question_.c_str());
+        ImGui::PopTextWrapPos();
+        ImGui::Separator();
+        if (!bbport_dir_.empty() && ImGui::Button("Use this folder")) {
+            if (bbport_source_ == BbportSource::ExeFolder) {   // the normal place: nothing to remember
+                chosen_bbport_.clear();
+                config_.erase("bbport_dir");
+            } else {
+                chosen_bbport_ = bbport_dir_;
+                config_["bbport_dir"] = narrow(bbport_dir_.wstring());
+            }
+            save_config();
+            reload_setup();
+            ImGui::CloseCurrentPopup();
+        }
+        if (!bbport_dir_.empty()) ImGui::SameLine();
+        if (ImGui::Button("Choose another folder...")) {
+            ImGui::CloseCurrentPopup();
+            choose_folder();
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Close")) ImGui::CloseCurrentPopup();
+        ImGui::EndPopup();
+    }
+
+    if (open_error_) {
+        ImGui::OpenPopup("bbbridge###error");
+        open_error_ = false;
+    }
+    if (ImGui::BeginPopupModal("bbbridge###error", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+        ImGui::PushTextWrapPos(wrap);
+        ImGui::TextColored(ImVec4(0.95f, 0.6f, 0.5f, 1), "%s", error_.c_str());
+        ImGui::PopTextWrapPos();
+        ImGui::Separator();
+        if (ImGui::Button("OK", ImVec2(100, 0)) || ImGui::IsKeyPressed(ImGuiKey_Enter)) ImGui::CloseCurrentPopup();
+        ImGui::EndPopup();
+    }
+}
+
 void App::log_panel() {
     ImGui::SeparatorText("Log");
     if (ImGui::SmallButton("Copy log")) {
@@ -559,31 +727,27 @@ void App::frame() {
     setup_panel();
     ImGui::Spacing();
 
-    const bool signed_in = !account_kind(state_path(), npid_).empty();
-    ImGui::BeginDisabled(!setup_ || game_running_ || !signed_in);
+    // PLAY and bbport settings stay clickable: when something is missing they say what.
+    ImGui::BeginDisabled(game_running_);
     ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.55f, 0.12f, 0.12f, 1));
     ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.7f, 0.16f, 0.16f, 1));
     if (ImGui::Button(game_running_ ? "  PLAYING  " : "    PLAY    ", ImVec2(160, 40))) play();
     ImGui::PopStyleColor(2);
     ImGui::EndDisabled();
-    if (!signed_in && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-        ImGui::SetTooltip("Sign in with Discord first.");
     ImGui::SameLine();
     if (ImGui::Button(bridge_ ? "Stop bridge" : "Start bridge", ImVec2(130, 40))) {
         if (bridge_) stop_bridge();
         else start_bridge();
     }
     ImGui::SameLine();
-    ImGui::BeginDisabled(!setup_ || launcher_running_);
-    if (ImGui::Button("bbport settings...", ImVec2(160, 40))) launch(setup_->launcher_exe(), setup_->bbport);
-    ImGui::EndDisabled();
-    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+    if (ImGui::Button("bbport settings...", ImVec2(160, 40))) open_launcher();
+    if (ImGui::IsItemHovered())
         ImGui::SetTooltip("Opens the bbport launcher for graphics, mods and cheats. Close it before pressing PLAY here.");
-    if (!notice_.empty()) ImGui::TextColored(ImVec4(0.95f, 0.5f, 0.4f, 1), "%s", notice_.c_str());
     ImGui::Spacing();
     log_panel();
 
     account_popups();
+    message_popups();
     if (confirm_close_) ImGui::OpenPopup("Close bbbridge?");
     if (ImGui::BeginPopupModal("Close bbbridge?", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
         ImGui::TextUnformatted("The game is still running. Closing bbbridge takes it offline.");

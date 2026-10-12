@@ -110,6 +110,31 @@ bool is_bbport_dir(const fs::path& dir) {
     return fs::is_regular_file(dir / L"Bloodborne.exe", ec) || fs::is_regular_file(dir / L"Play Bloodborne.exe", ec);
 }
 
+fs::path find_bbport(const fs::path& exe_dir, const fs::path& chosen, const std::string& game_dir,
+                     BbportSource* source) {
+    const std::pair<fs::path, BbportSource> candidates[] = {
+        {chosen, BbportSource::Chosen},
+        {exe_dir.parent_path(), BbportSource::ExeFolder},   // bbbridge lives in a folder inside bbport's
+        {exe_dir, BbportSource::ExeFolder},                 // or right next to Bloodborne.exe
+        {game_dir.empty() ? fs::path() : fs::path(widen(game_dir)).parent_path(), BbportSource::Launcher}};
+    for (const auto& [dir, src] : candidates)
+        if (!dir.empty() && is_bbport_dir(dir)) {
+            if (source) *source = src;
+            return dir;
+        }
+    if (source) *source = BbportSource::None;
+    return {};
+}
+
+std::string describe(BbportSource source) {
+    switch (source) {
+    case BbportSource::Chosen: return "the folder you chose";
+    case BbportSource::ExeFolder: return "the folder bbbridge is in";
+    case BbportSource::Launcher: return "found from the bbport launcher's game folder";
+    default: return "not found";
+    }
+}
+
 BbportSetup::BbportSetup(const fs::path& exe_dir, const fs::path& bbport_dir) : exe_dir_(exe_dir), chosen_(bbport_dir) {
     reload();
 }
@@ -130,17 +155,7 @@ void BbportSetup::reload() {
         throw SetupError("bbport launcher settings not found. Start the bbport launcher once and close it.");
     settings = read_json(settings_file);
     if (!settings.is_object()) throw SetupError("the bbport launcher's settings.json cannot be read");
-    bbport.clear();
-    std::vector<fs::path> candidates;
-    if (!chosen_.empty()) candidates.push_back(chosen_);
-    candidates.push_back(exe_dir_.parent_path());   // bbbridge lives in a folder inside bbport's
-    const std::string game_dir = jstr(settings, "game_dir");
-    if (!game_dir.empty()) candidates.push_back(fs::path(widen(game_dir)).parent_path());
-    for (const auto& c : candidates)
-        if (is_bbport_dir(c)) {
-            bbport = c;
-            break;
-        }
+    bbport = find_bbport(exe_dir_, chosen_, jstr(settings, "game_dir"), &source);
     if (bbport.empty()) throw SetupError("bbport folder not found - choose the folder with Bloodborne.exe.");
     const std::string user = jstr(settings, "user_dir"), patches = jstr(settings, "patches_dir");
     user_dir = user.empty() ? bbport / L"user" : fs::path(widen(user));

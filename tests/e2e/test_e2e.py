@@ -661,12 +661,71 @@ def part_d():
         fake.server_close()
 
 
+# ---------------------------------------------------------------- E: bbport setup
+
+def part_e():
+    print("-- E: routing a fresh bbport (sandboxed APPDATA)")
+    tmp = tempfile.mkdtemp(prefix="bbbridge-e2e-")
+    appdata, bbport = os.path.join(tmp, "AppData"), os.path.join(tmp, "bloodborne")
+    user = os.path.join(bbport, "user")
+    os.makedirs(os.path.join(appdata, "bbport-launcher"))
+    os.makedirs(user)
+    open(os.path.join(bbport, "Bloodborne.exe"), "wb").close()
+    mine = {"https://example.test:1": "http://127.0.0.1:1"}
+    with open(os.path.join(user, "host_overrides.custom.json"), "w") as fh:
+        json.dump(mine, fh)
+    sfile = os.path.join(appdata, "bbport-launcher", "settings.json")
+    fresh = {"ui_language": "", "game_dir": os.path.join(bbport, "CUSA03173"), "user_dir": "", "online": False,
+             "online_server": "srv.shadps4.net:31313", "online_webapi": "", "online_npid": "", "online_password": "",
+             "online_upnp": True, "extra_env": "BB_GPU_LOG=info SHADPS4_P2P_PORT=1"}
+    with open(sfile, "w") as fh:
+        json.dump(fresh, fh)
+    env = dict(os.environ, APPDATA=appdata)
+
+    def route(on):
+        return subprocess.run([EXE, "--route", "on" if on else "off", "--bbport", bbport], env=env,
+                              capture_output=True, text=True, timeout=30)
+
+    def settings():
+        with open(sfile) as fh:
+            return json.load(fh)
+
+    r = route(True)
+    s = settings()
+    check("route on: bbport points at the bridge", r.returncode == 0 and "routed=1" in r.stdout and s["online"] is True
+          and s["online_server"] == "127.0.0.1:31313" and s["online_webapi"] == "http://127.0.0.1:31315", r.stdout + str(s))
+    check("route on: an empty password gets a placeholder (bbport skips online without one)",
+          s["online_password"] == "bbbridge", s["online_password"])
+    check("route on: extra variables merged, P2P port pinned once",
+          s["extra_env"].split() == ["BB_GPU_LOG=info", "SHADPS4_P2P_PORT=3658"], s["extra_env"])
+    check("route on: npid untouched, key order kept", s["online_npid"] == "" and list(s)[:4] == list(fresh)[:4], list(s))
+    ov = json.load(open(os.path.join(user, "host_overrides.custom.json")))
+    check("route on: overrides written, the player's own backed up",
+          "_bbbridge" in ov and json.load(open(os.path.join(user, "host_overrides.custom.json.before-bbbridge"))) == mine)
+    r = route(False)
+    s = settings()
+    check("route off: back to shadNet, password and variables restored",
+          r.returncode == 0 and s["online_server"] == "srv.shadps4.net:31313" and s["online_webapi"] == ""
+          and s["online_password"] == "" and s["extra_env"] == "BB_GPU_LOG=info", s)
+    check("route off: the player's own overrides restored",
+          json.load(open(os.path.join(user, "host_overrides.custom.json"))) == mine)
+    s["online_password"] = "secret"
+    with open(sfile, "w") as fh:
+        json.dump(s, fh)
+    route(True)
+    on_pw = settings()["online_password"]
+    route(False)
+    check("a real shadNet password is left alone", on_pw == "secret" and settings()["online_password"] == "secret",
+          (on_pw, settings()["online_password"]))
+
+
 def main():
     print("== bbbridge C++ end-to-end (%s) ==" % os.path.abspath(EXE))
     part_a()
     part_b()
     part_c()
     part_d()
+    part_e()
     print("\n%d passed, %d failed" % (len(PASSED), len(FAILED)))
     sys.exit(1 if FAILED else 0)
 

@@ -42,6 +42,7 @@ public:
     std::string npid() const { return jstr(settings, "online_npid"); }
     bool routed() const;
     bool patched() const;
+    bool game_ready() const;   // the launcher has a game folder with eboot.bin
 
     // the caller makes sure the launcher is closed
     void set_npid(const std::string& npid);

@@ -7,6 +7,7 @@
 
 #include "account_link.hpp"
 #include "bridge.hpp"
+#include "setup.hpp"
 
 namespace {
 std::atomic<bool> g_quit{false};
@@ -19,12 +20,15 @@ BOOL WINAPI on_ctrl(DWORD) {
 int wmain(int argc, wchar_t** argv) {
     std::wstring config_path = L"bbbridge_config.json", log_path, web_code_npid;
     bool link = false;
+    std::wstring route, bbport_dir;
     struct { std::wstring op, name, code; } account_op;
     for (int i = 1; i < argc; ++i) {
         const std::wstring a = argv[i];
         if (a == L"--config" && i + 1 < argc) config_path = argv[++i];
         else if (a == L"--log" && i + 1 < argc) log_path = argv[++i];
         else if (a == L"--link-discord") link = true;
+        else if (a == L"--route" && i + 1 < argc) route = argv[++i];
+        else if (a == L"--bbport" && i + 1 < argc) bbport_dir = argv[++i];
         else if (a == L"--web-code" && i + 1 < argc) web_code_npid = argv[++i];
         else if (a == L"--create" && i + 1 < argc) account_op = {L"create", argv[++i], L""};
         else if (a == L"--recover" && i + 2 < argc) {
@@ -37,7 +41,8 @@ int wmain(int argc, wchar_t** argv) {
         } else {
             std::printf("usage: bbbridge-cli [--config file.json] [--log file.log] [--version]\n"
                         "                    [--link-discord] [--web-code NPID] [--create NAME]\n"
-                        "                    [--recover NAME CODE] [--sign-out NAME]\n");
+                        "                    [--recover NAME CODE] [--sign-out NAME]\n"
+                        "                    [--route on|off [--bbport DIR]]\n");
             return 2;
         }
     }
@@ -70,6 +75,20 @@ int wmain(int argc, wchar_t** argv) {
         }
         std::printf("signed in as %s\n", dl.online_id().c_str());
         return 0;
+    }
+    if (!route.empty()) {   // point bbport at the bridge (on) or back (off), as the app's checkbox
+        try {
+            wchar_t self[MAX_PATH];
+            GetModuleFileNameW(nullptr, self, MAX_PATH);
+            bb::BbportSetup setup(bb::fs::path(self).parent_path(), bbport_dir);
+            if (route == L"on") setup.enable();
+            else setup.disable();
+            std::printf("ok: bbport %s, routed=%d\n", bb::narrow(setup.bbport.wstring()).c_str(), setup.routed() ? 1 : 0);
+            return 0;
+        } catch (const std::exception& e) {
+            std::printf("failed: %s\n", e.what());
+            return 1;
+        }
     }
     if (!account_op.op.empty()) {
         const std::wstring state = bb::widen(cfg.state_file);

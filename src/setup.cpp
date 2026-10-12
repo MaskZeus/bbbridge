@@ -16,6 +16,7 @@ constexpr int kP2pPort = 3658;
 constexpr const char* kBridgeServer = "127.0.0.1:31313";
 constexpr const char* kBridgeWebapi = "http://127.0.0.1:31315";
 constexpr const char* kPublicServer = "srv.shadps4.net:31313";
+constexpr const char* kPlaceholderPassword = "bbbridge";   // see enable()
 
 // bbhost's play-log patch (bbhost src/engine/playlog.cpp) in bbport's patch
 // format: the float immediates of `mov dword [rip+disp], imm32` in
@@ -148,7 +149,14 @@ void BbportSetup::reload() {
 
 bool BbportSetup::routed() const {
     return jint(settings, "online", 0) && jstr(settings, "online_server") == kBridgeServer &&
-           jstr(settings, "online_webapi") == kBridgeWebapi && ours(overrides_file());
+           jstr(settings, "online_webapi") == kBridgeWebapi && !jstr(settings, "online_password").empty() &&
+           ours(overrides_file());
+}
+
+bool BbportSetup::game_ready() const {
+    const std::string dir = jstr(settings, "game_dir");
+    std::error_code ec;
+    return !dir.empty() && fs::is_regular_file(fs::path(widen(dir)) / L"eboot.bin", ec);
 }
 
 bool BbportSetup::patched() const {
@@ -170,6 +178,10 @@ void BbportSetup::enable() {
     settings["online"] = true;
     settings["online_server"] = kBridgeServer;
     settings["online_webapi"] = kBridgeWebapi;
+    // bbport does not go online without a password (np_handler.cpp: "shadNet
+    // enabled but credentials missing, skipping"). The bridge never reads it; a
+    // player without a shadNet account just needs something there.
+    if (jstr(settings, "online_password").empty()) settings["online_password"] = kPlaceholderPassword;
     const std::string port = std::to_string(kP2pPort);
     settings["extra_env"] = merge_env(jstr(settings, "extra_env"), kP2pVar, &port);
     save_settings();
@@ -187,6 +199,10 @@ void BbportSetup::disable() {
     if (webapi == kBridgeWebapi) webapi.clear();
     settings["online_server"] = server;
     settings["online_webapi"] = webapi;
+    if (jstr(settings, "online_password") == kPlaceholderPassword) {   // ours: back to what it was
+        const std::string before = jstr(old, "online_password");
+        settings["online_password"] = before == kPlaceholderPassword ? "" : before;
+    }
     settings["extra_env"] = merge_env(jstr(settings, "extra_env"), kP2pVar, nullptr);
     save_settings();
     std::error_code ec;

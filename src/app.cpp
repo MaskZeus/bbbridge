@@ -362,6 +362,9 @@ void App::setup_panel() {
             reload_setup();
         }
     }
+    if (!setup_->game_ready())
+        ImGui::TextColored(ImVec4(0.95f, 0.75f, 0.3f, 1),
+                           "Choose your game folder (CUSA03173, with eboot.bin) in the bbport launcher first.");
     account_row();
     ImGui::BeginDisabled(launcher_running_);
     bool routed = routed_;
